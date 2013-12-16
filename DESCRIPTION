@@ -1,10 +1,10 @@
 Package: lineage
 Type: Package
 Title: Analytical lineage tracking.
-Version: 1.0
+Version: 0.1
 Date: 2013-12-15
-Author: Josh Wills <jwills+github@cloudera.com>
-Maintainer: Josh Wills <jwills+github@cloudera.com>
+Author: Josh Wills <jwills+github at cloudera>
+Maintainer: Josh Wills <jwills+github at cloudera>
 Description: Utilities for recording the transformations applied
 to the vectors in a data frame so that they may be serialized and
 used in different contexts (e.g., to share a set of transforms
