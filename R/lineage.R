@@ -81,7 +81,7 @@ setMethod("names<-", signature("AbstractLineage", "vector"),
 xfunc <- function(name, cls="LineageVector") {
   setMethod(name, signature(cls), function(x) { map.lv(name, list(x))})
 }
-sapply(c("abs", "log", "log10", "sqrt", "floor", "ceiling",
+sapply(c("abs", "log", "log10", "exp", "sqrt", "floor", "ceiling",
          "is.na", "!", "tolower", "toupper"), xfunc)
 sapply(c("as.character", "as.numeric", "as.double", "as.factor"), xfunc)
 sapply(c("tolower", "toupper", "as.integer", "as.character"),
