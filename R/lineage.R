@@ -1,70 +1,110 @@
-# Creates a namespace for tracking the transformations that have
-# been applied to a set of LineageVectors
-Lineage <- function(existing=list()) {
-  .lineage <- existing
-  function(lv=NULL, id=NULL) {
-    if (is.null(lv)) {
-      return(.lineage)
-    }
-    if (is.null(id)) {
-      id <- length(.lineage) + 1
-      lv@id <- id
-    }
-    .lineage[[id]] <<- lv
-    lv
+library(RProtoBuf)
+readProtoFiles("proto//lineage.proto")
+
+setClass("Lineage", representation(proto="Message"))
+Lineage <- function(existing=NULL) {
+  if (is.null(existing)) {
+    existing <- new(lineage.LineageProto)
   }
+  return(new("Lineage", proto=existing))
+}
+newvec.Lineage <- function(lin, name=NULL, parents=integer(), cl=NULL) {
+  id <- as.integer(length(lin@proto$vec) + 1) 
+  ret <- new(lineage.VectorProto, id=id, name=name,
+             parent_vec_id=parents, call=cl)
+  lin@proto$vec[[id]] <- ret
+  return(ret)
+}
+filterby.Lineage <- function(lin, vec) {
+  proto <- lin@proto$clone()
+  id <- length(proto$filter_vec_id) + 1
+  proto$filter_vec_id[[id]] <- vec@proto$id
+  return(Lineage(existing=proto))
 }
 
 ### LineageVector declarations
 
-setClass("AbstractLineage",
-         representation(id="numeric", parents="numeric", lineage="function",
-                        fn="character", args="list"))
-setClass("LineageVector",
-         contains=c("vector", "AbstractLineage"))
-setClass("LineageFactor", contains=c("factor", "AbstractLineage"))
+setClass("AbstractLineageVector",
+         representation(proto="Message", lineage="Lineage"))
+setClass("LineageVector", contains=c("vector", "AbstractLineageVector"))
+setClass("LineageFactor", contains=c("factor", "AbstractLineageVector"))
 
-unit.lv <- function(vec, fn="constant", args=list(),
-                    parents=numeric(0), lineage=NULL) {
-  cls <- ifelse(inherits(vec, "factor"), "LineageFactor", "LineageVector")
-  lv <- new(cls, vec, parents=parents, fn=fn, args=args, lineage=lineage)
-  lineage(lv)
+to.Args <- function(args) {
+  if (length(args) == 0) {
+    return(NULL)
+  }
+  lapply(1:length(args), function(i) {
+    ret <- new(lineage.Arg)
+    v <- args[[i]]
+    if (is.character(v)) {
+      ret$str_value <- v
+    } else if (is.numeric(v)) {
+      ret$num_value <- v
+    } else if (is.list(v)) {
+      ret$list_value <- to.Args(v)
+    }
+    if (!is.null(names(args)[i])) {
+      ret$name <- names(args)[i]
+    }
+    return(ret)
+  })
 }
 
-map.lv <- function(fn, vecs, args=list()) {
+to.Call <- function(fn, args, var=NULL) {
+  return(new(lineage.Call, fn=fn, arg=to.Args(args), assign_to_var=var))
+}
+
+unit.lv <- function(vec, lineage, fn=NULL, args=list(),
+                    parents=integer(), name=NULL) {
+  cl <- NULL
+  if (!is.null(fn)) {
+    cl <- to.Call(fn, args)
+  } else if (length(vec) == 1) {
+    cl <- to.Call("constant", list(vec))
+  }
+  proto <- newvec.Lineage(lineage, name=name, parents=parents, cl=cl)
+  cls <- ifelse(inherits(vec, "factor"), "LineageFactor", "LineageVector")
+  return(new(cls, vec, proto=proto, lineage=lineage))
+}
+
+map.lv <- function(fn, vecs, args=list(), name=NULL) {
   lins <- unique(
     lapply(
-      Filter(function(v) { inherits(v, "AbstractLineage") }, vecs),
+      Filter(function(v) { inherits(v, "AbstractLineageVector") }, vecs),
       function(v) { v@lineage }))
   if (length(lins) != 1) {
     stop("Cannot reconcile parent lineages in map.lv")
   }
   lvecs <- lapply(vecs, function(v) {
-    if (inherits(v, "AbstractLineage")) {
+    if (inherits(v, "AbstractLineageVector")) {
       return(v)
     } else {
-      return(unit.lv(v, lineage=lins[[1]]))
+      return(unit.lv(v, lins[[1]]))
     }
   })
-  parents <- sapply(lvecs, function(v) { v@id })
-  if (inherits(parents, "list")) {
-    print(parents)
-    print(fn)
-    print(vecs)
-  }
+  parents <- sapply(lvecs, function(v) { v@proto$id })
   vargs <- lapply(lvecs, as.vector)
   value <- do.call(fn, c(vargs, args))
-  unit.lv(value, fn=fn, args=args, parents=parents, lineage=lins[[1]])
+  unit.lv(value, lins[[1]], fn=fn, args=args, parents=parents, name=name)
+}
+
+update.lv <- function(v, field, value) {
+  v@proto[[field]] <- value
+  v@lineage@proto$vec[[v@proto$id]] <- v@proto
+  v
 }
 
 # Override the core method for displaying LineageVectors so that
 # they usually look like regular vectors
-setMethod("show", signature("AbstractLineage"),
+setMethod("show", signature("AbstractLineageVector"),
           function(object) {
-            cls <- ifelse(inherits(object, "LineageFactor"), "factor", "vector")
-            show(as(object, cls))
+            if (inherits(object, "LineageFactor")) {
+              show(as(object, "factor"))
+            } else {
+              show(as.vector(object))
+            }
           })
-setMethod("print", signature("AbstractLineage"),
+setMethod("print", signature("AbstractLineageVector"),
           function(x) {
             if(inherits(x, "LineageFactor")) {
               print(factor(as.character(x))) 
@@ -72,9 +112,9 @@ setMethod("print", signature("AbstractLineage"),
               print(as.vector(x))
             }
           })
-setMethod("names", signature("AbstractLineage"),
+setMethod("names", signature("AbstractLineageVector"),
           function(x) { attr(x, "names") })
-setMethod("names<-", signature("AbstractLineage", "vector"),
+setMethod("names<-", signature("AbstractLineageVector", "vector"),
           function(x, value) { attr(x, "names") <- as.character(value); x })
 
 # Pattern for single-arg primitive R functions on LineageVectors
@@ -83,9 +123,13 @@ xfunc <- function(name, cls="LineageVector") {
 }
 sapply(c("abs", "log", "log10", "exp", "sqrt", "floor", "ceiling",
          "is.na", "!", "tolower", "toupper"), xfunc)
-sapply(c("as.character", "as.numeric", "as.double", "as.factor"), xfunc)
-sapply(c("tolower", "toupper", "as.integer", "as.character"),
-       xfunc, cls="LineageFactor")
+sapply(c("tolower", "toupper"), xfunc, cls="LineageFactor")
+
+# Experimenting with if-else methods
+setMethod("ifelse", signature("LineageVector", "vector", "vector"),
+          function(test, yes, no) {
+            map.lv("ifelse", list(test, yes, no))
+          })
 
 # Pattern for binary-arg primitive R functions on LineageVectors
 e1e2func <- function(name) {
@@ -103,30 +147,29 @@ sapply(c("+", "*", "-", "/", "^", "&", "|",
 
 lineage <- function(df) {
   lin <- Lineage()
-  lvs <- lapply(df, function(x) { unit.lv(x, fn="df", lineage=lin) })
-  ldf <- as.data.frame(lvs)
+  ldf <- as.data.frame(lapply(df, function(x) {
+    unit.lv(x, lin)
+  }))
+  lapply(1:ncol(df), function(i) {
+    update.lv(ldf[[i]], "name", names(df)[i])
+  })
   class(ldf) <- c("LineageDataFrame", "data.frame")
   ldf
+}
+show.lineage <- function(v) {
+  writeLines(v@lineage@proto$toString())
 }
 check.lineage <- function(ldf, v) {
   if (is.null(v)) {
     return()
   }
-  if (!inherits(v, "AbstractLineage")) {
+  if (!inherits(v, "AbstractLineageVector")) {
     stop("Only lineage vectors may be assigned to lineage data.frames")
   }
   if (length(ldf) > 0) {
     lin <- ldf[[1]]@lineage
     if (!identical(lin, v@lineage)) {
       stop("Incompatible lineages in lineage data.frame assignment")
-    }
-    if (!identical(lin()[[v@id]], v)) {
-      vo <- lin()[[v@id]]
-      if (all(as.vector(vo) == as.vector(v))) {
-        lin(v, v@id) # Perform an update
-      } else {
-        stop("Input value was created with unsupported lineage function")
-      }
     }
   }
 }
@@ -146,6 +189,16 @@ assign("[[<-.LineageDataFrame", function (x, i, j, value) {
 })
 assign("$<-.LineageDataFrame", function(x, name, value) {
   check.lineage(x, value)
+  update.lv(value, "name", name)
   do.call("$<-.data.frame", list(x, name, value))
+})
+assign("names<-.LineageDataFrame", function(x, value) {
+  lapply(1:ncol(x), function(i) {
+    update.lv(x[[i]], "name", value[i])
+  })
+  d <- as.data.frame(x)
+  names(d) <- value
+  class(d) <- c("LineageDataFrame", "data.frame")
+  d  
 })
        

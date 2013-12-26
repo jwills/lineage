@@ -1,0 +1,34 @@
+
+package lineage;
+
+message Arg {
+  optional string name = 1;
+  optional string var_name = 2;
+  optional double num_value = 3;
+  optional string str_value = 4;
+  repeated Arg list_value = 5;
+}
+
+message Call {
+  required string fn = 1;
+  repeated Arg arg = 2;
+  optional string assign_to_var = 3;
+}
+
+message VectorProto {
+  required int32 id = 1;
+  optional string name = 2;
+  repeated int32 parent_vec_id = 3;
+  optional Call call = 4;
+}
+
+message SourceProto {
+  repeated string package = 1;
+  repeated Call call = 2;
+}
+
+message LineageProto {
+  optional SourceProto source = 1;
+  repeated VectorProto vec = 2;
+  repeated int32 filter_vec_id = 3;
+}
